@@ -1,0 +1,381 @@
+// ============================================
+// GCS FACULTY NOTICE MANAGEMENT SYSTEM
+// Updated for New Form Structure
+// ============================================
+
+// ⚙️ CONFIGURATION
+const CONFIG = {
+  FACULTY_EMAIL: 'gcsfaculty@gcsanquelim.ac.in',
+  
+  // Class-specific email groups
+  CLASS_EMAILS: {
+    'FYBA': 'gcs-fyba@gcsanquelim.ac.in',
+    'FYBSc': 'gcs-fybsc@gcsanquelim.ac.in',
+    'FYBCom': 'gcs-fybcom@gcsanquelim.ac.in',
+    'SYBA': 'gcs-syba@gcsanquelim.ac.in',
+    'SYBSc': 'gcs-sybsc@gcsanquelim.ac.in',
+    'SYBCom': 'gcs-sybcom@gcsanquelim.ac.in',
+    'TYBA': 'gcs-tyba@gcsanquelim.ac.in',
+    'TYBSc': 'gcs-tybsc@gcsanquelim.ac.in',
+    'TYBCom': 'gcs-tybcom@gcsanquelim.ac.in',
+    'PG': 'gcs-pg@gcsanquelim.ac.in'
+  },
+  
+  UPLOAD_FOLDER_NAME: 'Scanned Notice PDF Link (File responses)'
+};
+
+// ============================================
+// MAIN FUNCTION - Triggered on form submission
+// ============================================
+function onFormSubmit(e) {
+  try {
+    Logger.log('🔄 Form submitted - Processing notice...');
+    
+    if (!e || !e.namedValues) {
+      Logger.log('❌ Error: Event object or namedValues is undefined');
+      Logger.log('Event object: ' + JSON.stringify(e));
+      return;
+    }
+    
+    const responses = e.namedValues;
+    Logger.log('📋 Form responses: ' + JSON.stringify(responses));
+    
+    // Extract form data - UPDATED FIELD NAMES with safe access
+    const noticeData = {
+      email: (responses['Email'] && responses['Email'][0]) || 'unknown',
+      noticeNumber: (responses['Notice Number'] && responses['Notice Number'][0]) || 'N/A',
+      date: responses['Notice Date'] ? new Date(responses['Notice Date'][0]) : new Date(),
+      subject: (responses['Subject/Title'] && responses['Subject/Title'][0]) || 'No Subject',
+      type: (responses['Notice Type'] && responses['Notice Type'][0]) || 'General',
+      department: (responses['Department/Source'] && responses['Department/Source'][0]) || 'N/A',
+      priority: (responses['Priority'] && responses['Priority'][0]) || 'Normal',
+      targetAudience: responses['Target Audience'] || [],
+      actionRequired: (responses['Action Required?'] && responses['Action Required?'][0]) || 'No',
+      deadline: (responses['Deadline/Last Date'] && responses['Deadline/Last Date'][0]) ? new Date(responses['Deadline/Last Date'][0]) : null,
+      eventDate: (responses['Event Date/Time'] && responses['Event Date/Time'][0]) || '',
+      venue: (responses['Venue'] && responses['Venue'][0]) || '',
+      description: (responses['Brief Description'] && responses['Brief Description'][0]) || 'No description',
+      issuedBy: (responses['Issued By'] && responses['Issued By'][0]) || 'N/A',
+      approvedBy: (responses['Approved By'] && responses['Approved By'][0]) || 'N/A',
+      pdfUrl: (responses['Scanned Notice PDF'] && responses['Scanned Notice PDF'][0]) || ''
+    };
+    
+    Logger.log('✅ Form data extracted');
+    Logger.log('📧 Submitted by: ' + noticeData.email);
+    Logger.log('📄 PDF URL: ' + noticeData.pdfUrl);
+    
+    // Rename the uploaded PDF
+    const renamedPdfUrl = renamePDF(noticeData);
+    
+    // Send email with renamed PDF link
+    sendEmailNotification(noticeData, renamedPdfUrl);
+    
+    Logger.log('✅ Notice processed successfully: ' + noticeData.noticeNumber);
+    
+  } catch (error) {
+    Logger.log('❌ Error: ' + error.toString());
+    Logger.log('❌ Error stack: ' + error.stack);
+    
+    // Try to send error email (simplified version)
+    try {
+      MailApp.sendEmail({
+        to: 'apps@gcsanquelim.ac.in',
+        subject: '❌ GCS Notice System Error',
+        body: 'An error occurred:\n\n' + error.toString() + '\n\nStack:\n' + error.stack
+      });
+    } catch (e) {
+      Logger.log('Could not send error email: ' + e.toString());
+    }
+  }
+}
+
+// ============================================
+// RENAME PDF
+// Format: YYYY-MM-DD_Department_Subject.pdf
+// ============================================
+function renamePDF(noticeData) {
+  try {
+    Logger.log('🔍 Finding uploaded PDF to rename...');
+    
+    // Find the upload folder
+    const folders = DriveApp.getFoldersByName(CONFIG.UPLOAD_FOLDER_NAME);
+    
+    if (!folders.hasNext()) {
+      Logger.log('⚠️ Upload folder not found: ' + CONFIG.UPLOAD_FOLDER_NAME);
+      return noticeData.pdfUrl;
+    }
+    
+    const uploadFolder = folders.next();
+    Logger.log('✅ Found upload folder');
+    
+    // Get all files and sort by last updated (most recent first)
+    const files = uploadFolder.getFiles();
+    const fileList = [];
+    
+    while (files.hasNext()) {
+      const file = files.next();
+      // Only include PDF files
+      if (file.getMimeType() === 'application/pdf') {
+        fileList.push(file);
+      }
+    }
+    
+    if (fileList.length === 0) {
+      Logger.log('⚠️ No PDF files found in upload folder');
+      return noticeData.pdfUrl;
+    }
+    
+    // Sort by last updated time (most recent first)
+    fileList.sort((a, b) => b.getLastUpdated().getTime() - a.getLastUpdated().getTime());
+    
+    // Get the most recent file
+    const file = fileList[0];
+    Logger.log('📄 Found most recent PDF: ' + file.getName());
+    
+    // FILENAME FORMAT: YYYY-MM-DD_Department_Subject.pdf
+    const dateStr = Utilities.formatDate(noticeData.date, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    
+    // Clean department name
+    const cleanDepartment = noticeData.department
+      .replace(/[^a-zA-Z0-9]/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '')
+      .substring(0, 30);
+    
+    // Clean subject
+    const cleanSubject = noticeData.subject
+      .replace(/[^a-zA-Z0-9]/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '')
+      .substring(0, 50);
+    
+    const newFileName = `${dateStr}_${cleanDepartment}_${cleanSubject}.pdf`;
+    
+    Logger.log('📝 Renaming to: ' + newFileName);
+    
+    // Rename the file
+    file.setName(newFileName);
+    
+    Logger.log('✅ PDF renamed successfully!');
+    
+    return file.getUrl();
+    
+  } catch (error) {
+    Logger.log('⚠️ Error renaming PDF: ' + error.toString());
+    return noticeData.pdfUrl;
+  }
+}
+
+// ============================================
+// SEND EMAIL NOTIFICATION
+// Sends to appropriate groups based on target audience
+// ============================================
+function sendEmailNotification(noticeData, pdfUrl) {
+  try {
+    // Determine recipient groups based on target audience
+    const recipients = determineRecipients(noticeData.targetAudience);
+    
+    Logger.log('📧 Sending to: ' + recipients.join(', '));
+    
+    const subject = `[${noticeData.priority}] ${noticeData.type}: ${noticeData.subject}`;
+    
+    let emailBody = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <div style="background-color: #2c3e50; color: white; padding: 20px; border-radius: 5px 5px 0 0;">
+          <h2 style="margin: 0;">📢 New Notice - ${noticeData.type}</h2>
+        </div>
+        
+        <div style="background-color: #f8f9fa; padding: 20px; border-left: 4px solid #3498db; margin: 0;">
+          <table style="width: 100%; border-collapse: collapse;">
+            <tr>
+              <td style="padding: 8px; font-weight: bold; color: #2c3e50; width: 40%;">Notice Number:</td>
+              <td style="padding: 8px;">${noticeData.noticeNumber}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; font-weight: bold; color: #2c3e50;">Date:</td>
+              <td style="padding: 8px;">${Utilities.formatDate(noticeData.date, Session.getScriptTimeZone(), 'dd MMMM yyyy')}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; font-weight: bold; color: #2c3e50;">Subject:</td>
+              <td style="padding: 8px;">${noticeData.subject}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; font-weight: bold; color: #2c3e50;">Department:</td>
+              <td style="padding: 8px;">${noticeData.department}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; font-weight: bold; color: #2c3e50;">Priority:</td>
+              <td style="padding: 8px; color: ${getPriorityColor(noticeData.priority)}; font-weight: bold;">${noticeData.priority}</td>
+            </tr>
+          </table>
+        </div>
+        
+        <div style="padding: 20px; background-color: white;">
+          <h3 style="color: #34495e; border-bottom: 2px solid #3498db; padding-bottom: 10px;">Brief Description:</h3>
+          <p style="line-height: 1.6; color: #555;">${noticeData.description.replace(/\n/g, '<br>')}</p>
+        </div>
+    `;
+    
+    // Add action required alert
+    if (noticeData.actionRequired === 'Yes') {
+      emailBody += `
+        <div style="background-color: #fff3cd; padding: 15px; border-left: 4px solid #ffc107; margin: 20px;">
+          <p style="margin: 0; font-weight: bold;">⚠️ ACTION REQUIRED</p>
+        </div>
+      `;
+    }
+    
+    // Add deadline if present
+    if (noticeData.deadline) {
+      emailBody += `
+        <div style="background-color: #f8d7da; padding: 15px; border-left: 4px solid #dc3545; margin: 20px;">
+          <p style="margin: 0;"><strong>📅 Deadline:</strong> ${Utilities.formatDate(noticeData.deadline, Session.getScriptTimeZone(), 'dd MMMM yyyy')}</p>
+        </div>
+      `;
+    }
+    
+    // Add event details if present
+    if (noticeData.eventDate) {
+      emailBody += `
+        <div style="padding: 0 20px;">
+          <p style="margin: 10px 0;"><strong>📅 Event Date/Time:</strong> ${noticeData.eventDate}</p>
+        </div>
+      `;
+    }
+    
+    if (noticeData.venue) {
+      emailBody += `
+        <div style="padding: 0 20px;">
+          <p style="margin: 10px 0;"><strong>📍 Venue:</strong> ${noticeData.venue}</p>
+        </div>
+      `;
+    }
+    
+    emailBody += `
+        <div style="text-align: center; padding: 30px 20px;">
+          <a href="${pdfUrl}" style="background-color: #3498db; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">📄 View Full Notice (PDF)</a>
+        </div>
+        
+        <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 30px 20px;">
+        
+        <div style="padding: 0 20px; font-size: 12px; color: #7f8c8d;">
+          <p><strong>Issued By:</strong> ${noticeData.issuedBy}</p>
+          <p><strong>Approved By:</strong> ${noticeData.approvedBy}</p>
+          <p><strong>Target Audience:</strong> ${noticeData.targetAudience.join(', ')}</p>
+        </div>
+        
+        <div style="margin-top: 30px; padding: 20px; background-color: #ecf0f1; border-radius: 0 0 5px 5px; font-size: 11px; color: #95a5a6; text-align: center;">
+          <p style="margin: 5px 0;"><strong>Government College of Arts, Science and Commerce</strong></p>
+          <p style="margin: 5px 0;">Sanquelim, Goa</p>
+          <p style="margin: 5px 0;">This is an automated notification</p>
+        </div>
+      </div>
+    `;
+    
+    // Send email to all determined recipients
+    MailApp.sendEmail({
+      to: recipients.join(','),
+      subject: subject,
+      htmlBody: emailBody
+    });
+    
+    Logger.log('✅ Email sent to: ' + recipients.join(', '));
+    
+  } catch (error) {
+    Logger.log('❌ Email error: ' + error.toString());
+    throw error;
+  }
+}
+
+// ============================================
+// DETERMINE RECIPIENTS
+// Routes to specific class groups based on selection
+// ============================================
+function determineRecipients(targetAudience) {
+  const recipients = [];
+  
+  // Check if "Students (All)" is selected
+  const allStudents = targetAudience.some(audience => 
+    audience.toLowerCase().includes('students (all)')
+  );
+  
+  if (allStudents) {
+    // Send to ALL class groups
+    Logger.log('📧 "Students (All)" selected - sending to all class groups');
+    Object.values(CONFIG.CLASS_EMAILS).forEach(email => {
+      if (!recipients.includes(email)) {
+        recipients.push(email);
+      }
+    });
+  } else {
+    // Check for specific class selections
+    targetAudience.forEach(audience => {
+      // Check each class in the CLASS_EMAILS mapping
+      Object.keys(CONFIG.CLASS_EMAILS).forEach(className => {
+        if (audience === className) {
+          const classEmail = CONFIG.CLASS_EMAILS[className];
+          if (!recipients.includes(classEmail)) {
+            recipients.push(classEmail);
+            Logger.log('📧 Adding class: ' + className + ' → ' + classEmail);
+          }
+        }
+      });
+    });
+  }
+  
+  // Check if target audience includes staff/faculty
+  const includesStaff = targetAudience.some(audience => 
+    audience.toLowerCase().includes('staff') || 
+    audience.toLowerCase().includes('teaching')
+  );
+  
+  if (includesStaff || targetAudience.length === 0) {
+    if (!recipients.includes(CONFIG.FACULTY_EMAIL)) {
+      recipients.push(CONFIG.FACULTY_EMAIL);
+      Logger.log('📧 Adding faculty group');
+    }
+  }
+  
+  // Safety: if no recipients determined, send to faculty by default
+  if (recipients.length === 0) {
+    recipients.push(CONFIG.FACULTY_EMAIL);
+    Logger.log('⚠️ No specific audience matched, defaulting to faculty');
+  }
+  
+  return recipients;
+}
+
+// ============================================
+// HELPER FUNCTIONS
+// ============================================
+
+function getPriorityColor(priority) {
+  const colors = {
+    'Urgent (immediate action required)': '#dc3545',
+    'High (action required within week)': '#ff9800',
+    'Normal': '#28a745',
+    'Information only': '#6c757d'
+  };
+  return colors[priority] || '#6c757d';
+}
+
+function sendErrorEmail(error, formEvent) {
+  try {
+    let errorDetails = 'Error: ' + error.toString();
+    
+    if (formEvent) {
+      errorDetails += '\n\nForm data:\n' + JSON.stringify(formEvent.namedValues, null, 2);
+    }
+    
+    // Use hardcoded email instead of Session.getActiveUser()
+    MailApp.sendEmail({
+      to: 'apps@gcsanquelim.ac.in',
+      subject: '❌ GCS Notice System Error',
+      body: 'An error occurred:\n\n' + errorDetails
+    });
+    
+    Logger.log('📧 Error email sent to apps@gcsanquelim.ac.in');
+  } catch (e) {
+    Logger.log('Could not send error email: ' + e.toString());
+  }
+}
